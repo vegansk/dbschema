@@ -25,6 +25,7 @@ proc buildBase(debug: bool, bin: string, src: string) =
 proc test(name: string) =
   if not dirExists "bin":
     mkDir "bin"
+  --define: testScope
   --run
   buildBase true, "bin/test_" & name, "tests/test_" & name
 

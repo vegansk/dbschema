@@ -1,1 +1,1 @@
-echo "Hello, world!"
+import test_sqlite
