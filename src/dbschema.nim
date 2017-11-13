@@ -23,12 +23,19 @@ data Version, exported, eq, show:
   patch = 0
 
 proc `<`(x, y: Version): bool =
-  x.major < y.major or x.minor < y.minor or x.patch < y.patch
+  if x.major < y.major:
+    true
+  elif x.major == y.major and x.minor < y.minor:
+    true
+  elif x.major == y.major and x.minor == y.minor and x.patch < y.patch:
+    true
+  else:
+    false
 
 proc `<=`(x, y: Version): bool =
   x < y or x == y
 
-data Migration, exported:
+data Migration, exported, copy:
   version: Version
   name: string
   sql: SqlQuery
@@ -96,7 +103,6 @@ proc toDb(m: Migration): MigrationRow =
   )
 
 proc migrationRow(r: Row): Try[(int, MigrationRow)] = tryM do:
-  echo r
   if r.len != 7:
     raise newException(Exception, "Invalid row")
   let id = strToInt(r[0])
@@ -106,7 +112,6 @@ proc migrationRow(r: Row): Try[(int, MigrationRow)] = tryM do:
     parseFloat(r[5]).fromSeconds,
     r[6]
   )
-  echo row
   (id, row)
 
 proc insert(conn: Conn, m: MigrationRow): Try[Unit] = act do:
@@ -127,7 +132,7 @@ proc insert(conn: Conn, m: MigrationRow): Try[Unit] = act do:
 
 proc getLastMigrationRow(conn: Conn): Try[Option[(int, MigrationRow)]] = act do:
   ddl <- tryM fmt """
-    select * from $schemaTable order by id desc limit 1
+    select * from $schemaTable order by ver_major desc, ver_minor desc, ver_patch desc limit 1
   """
   conn.getAllRows(sql(ddl))
     .asList.headOption.traverse((r: Row) => r.migrationRow)
@@ -168,7 +173,7 @@ proc checkMigration(conn: Conn, m: Migration): Try[CheckResult] = act do:
   yield row.fold(
     () => lastRow.fold(
       () => CheckResult.Ok,
-      row => (if row[1].version < m.version: CheckResult.Ok else: CheckResult.Outdated)
+      r => (if r[1].version < m.version: CheckResult.Ok else: CheckResult.Outdated)
     ),
     row => (if m.sql.sqlHash == row[1].hash: CheckResult.Applied else: CheckResult.HashMismatch)
   )
@@ -204,5 +209,6 @@ proc migrate*(conn: Conn, migrations: List[Migration]): Try[Unit] = act do:
        conn.createSchemaTable
      else:
        ().success)
-  migrations.traverse((m: Migration) => conn.migrate(m))
+  migrations.sortBy((x: Migration, y: Migration) => cmp(x.version, y.version))
+    .traverse((m: Migration) => conn.migrate(m))
   yield ()
