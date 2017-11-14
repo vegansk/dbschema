@@ -2,7 +2,8 @@ import unittest,
        db_sqlite,
        fp.list,
        fp.trym,
-       fp.option
+       fp.option,
+       strutils
 
 include ../src/dbschema
 
@@ -124,3 +125,13 @@ suite "dbschema":
     expect(Exception): discard conn.migrate(asList(mismatched, m2), versionsConfig).run
     let row = conn.getLastMigrationRow(versions).run.get[1]
     check: row.version == m2.version
+
+  test "OS independent checksum":
+    let m11 = m1.copyMigration(
+      sql = m1.sql.string.replace("\n", "\c\L").sql
+    )
+    check: conn.migrate(asList(m11, m2), versionsConfig).run == ()
+    let row = conn.getLastMigrationRow(versions).run.get[1]
+    check: row.version == m2.version
+
+
