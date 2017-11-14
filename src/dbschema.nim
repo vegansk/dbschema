@@ -11,11 +11,11 @@ import boost.typeutils,
 const usePostgres = defined(dbschemaPostgres)
 when usePostgres:
   import db_postgres
-  type Conn = db_postgres.DbConn
+  type Conn* = db_postgres.DbConn
   type Row = db_postgres.Row
 else:
   import db_sqlite
-  type Conn = db_sqlite.DbConn
+  type Conn* = db_sqlite.DbConn
   type Row = db_sqlite.Row
 
 type Hash = string
