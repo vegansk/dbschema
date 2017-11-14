@@ -8,13 +8,16 @@ import boost.typeutils,
        times,
        securehash
 
-const usePostgreSql = not(defined(testScope) and not defined(testUsePostgres))
-when usePostgreSql:
-  import db_postgres, postgres
+const usePostgres = defined(dbschemaPostgres)
+when usePostgres:
+  import db_postgres
+  type Conn = db_postgres.DbConn
+  type Row = db_postgres.Row
 else:
   import db_sqlite
+  type Conn = db_sqlite.DbConn
+  type Row = db_sqlite.Row
 
-type Conn = DbConn
 type Hash = string
 
 data Version, exported, eq, show:
@@ -32,9 +35,6 @@ proc `<`(x, y: Version): bool =
   else:
     false
 
-proc `<=`(x, y: Version): bool =
-  x < y or x == y
-
 data Migration, exported, copy:
   version: Version
   name: string
@@ -47,15 +47,15 @@ proc toString(m: Migration): string =
 const schemaTable {.strdefine.} = "dbschema_version"
 
 proc hasSchemaTable(conn: Conn): Try[bool] = tryM:
-  when usePostgreSql:
+  when usePostgres:
     const pgReq = sql"""SELECT EXISTS (
   SELECT 1
   FROM   information_schema.tables
-  WHERE  table_schema = ?
+  WHERE  table_schema = current_schema()
   AND    table_name = ?
 )
 """
-    conn.getValue(pgReq, "public", schemaTable) == "t"
+    conn.getValue(pgReq, schemaTable) == "t"
   else:
     const sqliteReq = sql"SELECT name FROM sqlite_master WHERE type='table' AND name=?"
     conn.getAllRows(sqliteReq, schemaTable).len == 1
@@ -63,7 +63,7 @@ proc hasSchemaTable(conn: Conn): Try[bool] = tryM:
 proc createSchemaTable(conn: Conn): Try[Unit] =
   let ddl = fmt"""
     create table if not exists $schemaTable (
-      id ${when usePostgreSql: "bigserial primary key" else: "integer primary key autoincrement"},
+      id ${when usePostgres: "bigserial primary key" else: "integer primary key autoincrement"},
       ver_major integer not null,
       ver_minor integer not null,
       ver_patch integer not null,
@@ -81,9 +81,6 @@ proc parseQueries(s: SqlQuery): Try[List[SqlQuery]] = tryM do:
   .map(v => v.strip)
   .filter(v => not v.isNilOrEmpty)
   .map(v => sql(v))
-
-proc inTrn(q: List[SqlQuery]): List[SqlQuery] =
-  sql"begin transaction" ^^ q ++ asList(sql("end transaction"))
 
 proc sqlHash(q: SqlQuery): Hash =
   q.string.secureHash.`$`
@@ -106,10 +103,15 @@ proc migrationRow(r: Row): Try[(int, MigrationRow)] = tryM do:
   if r.len != 7:
     raise newException(Exception, "Invalid row")
   let id = strToInt(r[0])
+  let tm =
+    when usePostgres:
+      times.parse("yyyyMMddhhmmss", r[5]).toTime
+    else:
+      parseFloat(r[5]).fromSeconds
   let row = initMigrationRow(
     initVersion(strToInt(r[1]), strToInt(r[2]), strToInt(r[3])),
     r[4],
-    parseFloat(r[5]).fromSeconds,
+    tm,
     r[6]
   )
   (id, row)
@@ -117,7 +119,7 @@ proc migrationRow(r: Row): Try[(int, MigrationRow)] = tryM do:
 proc insert(conn: Conn, m: MigrationRow): Try[Unit] = act do:
   ddl <- tryM fmt"""
     insert into $schemaTable(ver_major, ver_minor, ver_patch, name, installed_on, hash)
-    values (?, ?, ?, ?, ${when usePostgreSql: "to_timestamp(?)" else: "?"}, ?)
+    values (?, ?, ?, ?, ${when usePostgres: "to_timestamp(?)" else: "?"}, ?)
     """
   tryM conn.exec(
     sql(ddl),

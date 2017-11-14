@@ -1,1 +1,1 @@
-import test_sqlite
+import test_dbschema
