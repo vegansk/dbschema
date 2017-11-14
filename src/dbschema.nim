@@ -229,3 +229,18 @@ proc migrate*(conn: Conn, migrations: List[Migration], versionsConfig: string): 
   migrations.sortBy((x: Migration, y: Migration) => cmp(x.version, y.version))
     .traverse((m: Migration) => conn.migrate(m, versions))
   yield ()
+
+proc isMigrationsUpToDate*(conn: Conn, migrations: List[Migration], versionsConfig: string): Try[bool] = act do:
+  versions <- parseVersionsConfig(versionsConfig)
+  initialized <- conn.hasSchemaTable(versions)
+
+  if not initialized:
+    false.success
+  else:
+    migrations.sortBy((x: Migration, y: Migration) => cmp(y.version, x.version)).headOption.fold(
+      () => true.success,
+      m => conn.checkMigration(m, versions).fold(
+        e => e.failure(bool),
+        chk => (chk == CheckResult.Applied).success
+      )
+    )

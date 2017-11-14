@@ -81,6 +81,9 @@ suite "dbschema":
   else:
     let conn = db_sqlite.open(":memory:", "", "", "")
 
+  test "Check if db is up to date before migrations":
+    check: conn.isMigrationsUpToDate(asList(m1), versionsConfig).run == false
+
   test "Create initial schema":
 
     check: conn.hasSchemaTable(versions).run == false
@@ -94,6 +97,10 @@ suite "dbschema":
       row.name == m1.name and
       row.hash == m1.sql.sqlHash
     )
+
+  test "Check if db is up to date after first migration":
+    check: conn.isMigrationsUpToDate(asList(m1), versionsConfig).run == true
+    check: conn.isMigrationsUpToDate(asList(m1, m2), versionsConfig).run == false
 
   test "Update schema":
 
