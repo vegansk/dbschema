@@ -73,11 +73,10 @@ suite "dbschema":
     # Cleanup and setup
     conn.exec(sql"BEGIN TRANSACTION")
     conn.exec(sql(fmt"DROP SCHEMA IF EXISTS $pgSchema CASCADE"))
-    conn.exec(sql(fmt"CREATE SCHEMA $pgSchema"))
-    conn.exec(sql(fmt"""GRANT ALL ON SCHEMA $pgSchema TO "${pgUser}""""))
-    conn.exec(sql(fmt"GRANT ALL ON SCHEMA $pgSchema TO public"))
+    conn.exec(sql(fmt"DROP SCHEMA IF EXISTS data CASCADE"))
+    conn.exec(sql"CREATE SCHEMA data")
     conn.exec(sql"COMMIT TRANSACTION")
-    conn.exec(sql(fmt"SET SCHEMA '$pgSchema'"))
+    conn.exec(sql"SET SCHEMA 'data'")
   else:
     let conn = db_sqlite.open(":memory:", "", "", "")
 

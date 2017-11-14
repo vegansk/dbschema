@@ -22,7 +22,7 @@ type Hash = string
 type VersionsConfig = tuple[schema: Option[string], table: string]
 
 proc toString(v: VersionsConfig): string =
-  when defined usePostgres:
+  when usePostgres:
     fmt"""${v.schema.map(v => v & ".").getOrElse("")}${v.table}"""
   else:
     v.table
@@ -77,7 +77,15 @@ proc createSchemaTable(conn: Conn, versions: VersionsConfig): Try[Unit] =
       hash text not null
     )
     """
-  tryM conn.exec(sql(ddl))
+  when usePostgres:
+    act do:
+      versions.schema.fold(
+        () => ().success,
+        v => tryM conn.exec(sql(fmt"create schema if not exists $v"))
+      )
+      tryM conn.exec(sql(ddl))
+  else:
+    tryM conn.exec(sql(ddl))
 
 proc parseQueries(s: SqlQuery): Try[List[SqlQuery]] = tryM do:
   s.string
