@@ -19,6 +19,13 @@ else:
   type Row = db_sqlite.Row
 
 type Hash = string
+type VersionsConfig = tuple[schema: Option[string], table: string]
+
+proc toString(v: VersionsConfig): string =
+  when defined usePostgres:
+    fmt"""${v.schema.map(v => v & ".").getOrElse("")}${v.table}"""
+  else:
+    v.table
 
 data Version, exported, eq, show:
   major: int
@@ -44,25 +51,23 @@ proc toString(m: Migration): string =
   let (m0, m1, p) = (m.version.major, m.version.minor, m.version.patch)
   fmt"$m0.$m1.$p - ${m.name}"
 
-const schemaTable {.strdefine.} = "dbschema_version"
-
-proc hasSchemaTable(conn: Conn): Try[bool] = tryM:
+proc hasSchemaTable(conn: Conn, versions: VersionsConfig): Try[bool] = tryM:
   when usePostgres:
-    const pgReq = sql"""SELECT EXISTS (
+    let pgReq = fmt"""SELECT EXISTS (
   SELECT 1
   FROM   information_schema.tables
-  WHERE  table_schema = current_schema()
+  WHERE  table_schema = ${versions.schema.fold(() => "current_schema()", v => "'" & v & "'")}
   AND    table_name = ?
 )
 """
-    conn.getValue(pgReq, schemaTable) == "t"
+    conn.getValue(sql(pgReq), versions.table) == "t"
   else:
     const sqliteReq = sql"SELECT name FROM sqlite_master WHERE type='table' AND name=?"
-    conn.getAllRows(sqliteReq, schemaTable).len == 1
+    conn.getAllRows(sqliteReq, versions.toString).len == 1
 
-proc createSchemaTable(conn: Conn): Try[Unit] =
+proc createSchemaTable(conn: Conn, versions: VersionsConfig): Try[Unit] =
   let ddl = fmt"""
-    create table if not exists $schemaTable (
+    create table if not exists ${versions.toString} (
       id ${when usePostgres: "bigserial primary key" else: "integer primary key autoincrement"},
       ver_major integer not null,
       ver_minor integer not null,
@@ -105,7 +110,7 @@ proc migrationRow(r: Row): Try[(int, MigrationRow)] = tryM do:
   let id = strToInt(r[0])
   let tm =
     when usePostgres:
-      times.parse("yyyyMMddhhmmss", r[5]).toTime
+      times.parse(r[5], "yyyy-MM-dd' 'HH:mm:ss").toTime
     else:
       parseFloat(r[5]).fromSeconds
   let row = initMigrationRow(
@@ -116,9 +121,9 @@ proc migrationRow(r: Row): Try[(int, MigrationRow)] = tryM do:
   )
   (id, row)
 
-proc insert(conn: Conn, m: MigrationRow): Try[Unit] = act do:
+proc insert(conn: Conn, m: MigrationRow, versions: VersionsConfig): Try[Unit] = act do:
   ddl <- tryM fmt"""
-    insert into $schemaTable(ver_major, ver_minor, ver_patch, name, installed_on, hash)
+    insert into ${versions.toString}(ver_major, ver_minor, ver_patch, name, installed_on, hash)
     values (?, ?, ?, ?, ${when usePostgres: "to_timestamp(?)" else: "?"}, ?)
     """
   tryM conn.exec(
@@ -132,16 +137,16 @@ proc insert(conn: Conn, m: MigrationRow): Try[Unit] = act do:
   )
   yield ()
 
-proc getLastMigrationRow(conn: Conn): Try[Option[(int, MigrationRow)]] = act do:
+proc getLastMigrationRow(conn: Conn, versions: VersionsConfig): Try[Option[(int, MigrationRow)]] = act do:
   ddl <- tryM fmt """
-    select * from $schemaTable order by ver_major desc, ver_minor desc, ver_patch desc limit 1
+    select * from ${versions.toString} order by ver_major desc, ver_minor desc, ver_patch desc limit 1
   """
   conn.getAllRows(sql(ddl))
     .asList.headOption.traverse((r: Row) => r.migrationRow)
 
-proc getMigrationRowByVersion(conn: Conn, version: Version): Try[Option[(int, MigrationRow)]] = act do:
+proc getMigrationRowByVersion(conn: Conn, version: Version, versions: VersionsConfig): Try[Option[(int, MigrationRow)]] = act do:
   ddl <- tryM fmt """
-    select * from $schemaTable
+    select * from ${versions.toString}
     where ver_major = ? and ver_minor = ? and ver_patch = ?
     limit 1
   """
@@ -169,9 +174,9 @@ proc verify(r: CheckResult, m: Migration): Try[Unit] = tryM do:
   of CheckResult.Applied, CheckResult.Ok:
     discard
 
-proc checkMigration(conn: Conn, m: Migration): Try[CheckResult] = act do:
-  row <- conn.getMigrationRowByVersion(m.version)
-  lastRow <- conn.getLastMigrationRow
+proc checkMigration(conn: Conn, m: Migration, versions: VersionsConfig): Try[CheckResult] = act do:
+  row <- conn.getMigrationRowByVersion(m.version, versions)
+  lastRow <- conn.getLastMigrationRow(versions)
   yield row.fold(
     () => lastRow.fold(
       () => CheckResult.Ok,
@@ -180,17 +185,17 @@ proc checkMigration(conn: Conn, m: Migration): Try[CheckResult] = act do:
     row => (if m.sql.sqlHash == row[1].hash: CheckResult.Applied else: CheckResult.HashMismatch)
   )
 
-proc migrate(conn: Conn, migration: Migration): Try[Unit] = catch(
+proc migrate(conn: Conn, migration: Migration, versions: VersionsConfig): Try[Unit] = catch(
   act do:
     tryM conn.exec(sql"begin transaction")
-    chk <- conn.checkMigration(migration)
+    chk <- conn.checkMigration(migration, versions)
     chk.verify(migration)
     _ <- (block:
       if chk == CheckResult.Ok:
         act do:
           queries <- migration.sql.parseQueries
           queries.traverse((q: SqlQuery) => tryM conn.exec(q))
-          conn.insert(migration.toDb)
+          conn.insert(migration.toDb, versions)
           yield ()
       else:
         ().success
@@ -204,13 +209,23 @@ proc migrate(conn: Conn, migration: Migration): Try[Unit] = catch(
   )
 )
 
-proc migrate*(conn: Conn, migrations: List[Migration]): Try[Unit] = act do:
-  initialized <- conn.hasSchemaTable
+proc parseVersionsConfig(v: string): Try[VersionsConfig] = tryM do:
+  let cfg = v.split(".")
+  if cfg.len < 1 and cfg.len > 2:
+    raise newException(Exception, fmt"Invalid dbschema versions table name '$v'")
+  if cfg.len == 1:
+    (string.none, cfg[0])
+  else:
+    (cfg[0].some, cfg[1])
+
+proc migrate*(conn: Conn, migrations: List[Migration], versionsConfig: string): Try[Unit] = act do:
+  versions <- parseVersionsConfig(versionsConfig)
+  initialized <- conn.hasSchemaTable(versions)
   (block:
      if not initialized:
-       conn.createSchemaTable
+       conn.createSchemaTable(versions)
      else:
        ().success)
   migrations.sortBy((x: Migration, y: Migration) => cmp(x.version, y.version))
-    .traverse((m: Migration) => conn.migrate(m))
+    .traverse((m: Migration) => conn.migrate(m, versions))
   yield ()

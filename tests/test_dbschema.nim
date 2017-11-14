@@ -57,6 +57,11 @@ suite "dbschema":
     sql = sql(m1.sql.string & "---;\n")
   )
 
+  const configSchema = "dbschema"
+  const configTable = "dbschema_versions"
+  const versionsConfig = configSchema & "." & configTable
+  let versions = versionsConfig.parseVersionsConfig.run
+
   when usePostgres:
     let conn = db_postgres.open(
       "",
@@ -64,7 +69,7 @@ suite "dbschema":
       pgPass,
       fmt"host=$pgHost port=$pgPort dbname=$pgDb"
     )
-    const pgSchema = "dbschema"
+    const pgSchema = configSchema
     # Cleanup and setup
     conn.exec(sql"BEGIN TRANSACTION")
     conn.exec(sql(fmt"DROP SCHEMA IF EXISTS $pgSchema CASCADE"))
@@ -78,12 +83,12 @@ suite "dbschema":
 
   test "Create initial schema":
 
-    check: conn.hasSchemaTable.run == false
-    check: conn.migrate(asList(m1)).run == ()
-    check: conn.hasSchemaTable.run == true
+    check: conn.hasSchemaTable(versions).run == false
+    check: conn.migrate(asList(m1), versionsConfig).run == ()
+    check: conn.hasSchemaTable(versions).run == true
     check: conn.getAllRows(sql"select * from t1").len == 2
     check: conn.getAllRows(sql"select * from t2").len == 0
-    let row = conn.getLastMigrationRow.run.get[1]
+    let row = conn.getLastMigrationRow(versions).run.get[1]
     check(
       row.version == m1.version and
       row.name == m1.name and
@@ -92,24 +97,24 @@ suite "dbschema":
 
   test "Update schema":
 
-    check: conn.migrate(asList(m1, m2)).run == ()
-    let row = conn.getLastMigrationRow.run.get[1]
+    check: conn.migrate(asList(m1, m2), versionsConfig).run == ()
+    let row = conn.getLastMigrationRow(versions).run.get[1]
     check: row.version == m2.version
 
   test "Do nothing when schema is up to date":
 
-    check: conn.migrate(asList(m1, m2)).run == ()
-    let row = conn.getLastMigrationRow.run.get[1]
+    check: conn.migrate(asList(m1, m2), versionsConfig).run == ()
+    let row = conn.getLastMigrationRow(versions).run.get[1]
     check: row.version == m2.version
 
   test "Fail on outdated migration":
 
-    expect(Exception): discard conn.migrate(asList(m1, m2, outdated)).run
-    let row = conn.getLastMigrationRow.run.get[1]
+    expect(Exception): discard conn.migrate(asList(m1, m2, outdated), versionsConfig).run
+    let row = conn.getLastMigrationRow(versions).run.get[1]
     check: row.version == m2.version
 
   test "Fail on hash mismatch":
 
-    expect(Exception): discard conn.migrate(asList(mismatched, m2)).run
-    let row = conn.getLastMigrationRow.run.get[1]
+    expect(Exception): discard conn.migrate(asList(mismatched, m2), versionsConfig).run
+    let row = conn.getLastMigrationRow(versions).run.get[1]
     check: row.version == m2.version
