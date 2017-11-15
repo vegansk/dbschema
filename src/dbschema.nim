@@ -21,6 +21,9 @@ else:
 type Hash = string
 type VersionsConfig = tuple[schema: Option[string], table: string]
 
+type Result[T] = Try[T]
+template lift(v: untyped): untyped = tryM(v)
+
 proc toString(v: VersionsConfig): string =
   when usePostgres:
     fmt"""${v.schema.map(v => v & ".").getOrElse("")}${v.table}"""
@@ -51,7 +54,7 @@ proc toString(m: Migration): string =
   let (m0, m1, p) = (m.version.major, m.version.minor, m.version.patch)
   fmt"$m0.$m1.$p - ${m.name}"
 
-proc hasSchemaTable(conn: Conn, versions: VersionsConfig): Try[bool] = tryM:
+proc hasSchemaTable(conn: Conn, versions: VersionsConfig): Result[bool] = lift:
   when usePostgres:
     let pgReq = fmt"""SELECT EXISTS (
   SELECT 1
@@ -65,7 +68,7 @@ proc hasSchemaTable(conn: Conn, versions: VersionsConfig): Try[bool] = tryM:
     const sqliteReq = sql"SELECT name FROM sqlite_master WHERE type='table' AND name=?"
     conn.getAllRows(sqliteReq, versions.toString).len == 1
 
-proc createSchemaTable(conn: Conn, versions: VersionsConfig): Try[Unit] =
+proc createSchemaTable(conn: Conn, versions: VersionsConfig): Result[Unit] =
   let ddl = fmt"""
     create table if not exists ${versions.toString} (
       id ${when usePostgres: "bigserial primary key" else: "integer primary key autoincrement"},
@@ -81,14 +84,14 @@ proc createSchemaTable(conn: Conn, versions: VersionsConfig): Try[Unit] =
     act do:
       versions.schema.fold(
         () => ().success,
-        v => tryM conn.exec(sql(fmt"create schema if not exists $v"))
+        v => lift conn.exec(sql(fmt"create schema if not exists $v"))
       )
-      tryM conn.exec(sql(ddl))
+      lift conn.exec(sql(ddl))
   else:
-    tryM conn.exec(sql(ddl))
+    lift conn.exec(sql(ddl))
 
-proc parseQueries(s: SqlQuery): Try[List[SqlQuery]] = tryM do:
-  s.string
+proc parseQueries(s: SqlQuery): Result[List[SqlQuery]] =
+  lift s.string
   .split(";\n")
   .asList
   .map(v => v.strip)
@@ -112,7 +115,7 @@ proc toDb(m: Migration): MigrationRow =
     m.sql.sqlHash
   )
 
-proc migrationRow(r: Row): Try[(int, MigrationRow)] = tryM do:
+proc migrationRow(r: Row): Result[(int, MigrationRow)] = lift do:
   if r.len != 7:
     raise newException(Exception, "Invalid row")
   let id = strToInt(r[0])
@@ -129,12 +132,12 @@ proc migrationRow(r: Row): Try[(int, MigrationRow)] = tryM do:
   )
   (id, row)
 
-proc insert(conn: Conn, m: MigrationRow, versions: VersionsConfig): Try[Unit] = act do:
-  ddl <- tryM fmt"""
+proc insert(conn: Conn, m: MigrationRow, versions: VersionsConfig): Result[Unit] = act do:
+  ddl <- lift fmt"""
     insert into ${versions.toString}(ver_major, ver_minor, ver_patch, name, installed_on, hash)
     values (?, ?, ?, ?, ${when usePostgres: "to_timestamp(?)" else: "?"}, ?)
     """
-  tryM conn.exec(
+  lift conn.exec(
     sql(ddl),
     m.version.major,
     m.version.minor,
@@ -145,15 +148,15 @@ proc insert(conn: Conn, m: MigrationRow, versions: VersionsConfig): Try[Unit] = 
   )
   yield ()
 
-proc getLastMigrationRow(conn: Conn, versions: VersionsConfig): Try[Option[(int, MigrationRow)]] = act do:
-  ddl <- tryM fmt """
+proc getLastMigrationRow(conn: Conn, versions: VersionsConfig): Result[Option[(int, MigrationRow)]] = act do:
+  ddl <- lift fmt """
     select * from ${versions.toString} order by ver_major desc, ver_minor desc, ver_patch desc limit 1
   """
   conn.getAllRows(sql(ddl))
     .asList.headOption.traverse((r: Row) => r.migrationRow)
 
-proc getMigrationRowByVersion(conn: Conn, version: Version, versions: VersionsConfig): Try[Option[(int, MigrationRow)]] = act do:
-  ddl <- tryM fmt """
+proc getMigrationRowByVersion(conn: Conn, version: Version, versions: VersionsConfig): Result[Option[(int, MigrationRow)]] = act do:
+  ddl <- lift fmt """
     select * from ${versions.toString}
     where ver_major = ? and ver_minor = ? and ver_patch = ?
     limit 1
@@ -167,7 +170,7 @@ type CheckResult {.pure.} = enum
   HashMismatch,
   Outdated
 
-proc verify(r: CheckResult, m: Migration): Try[Unit] = tryM do:
+proc verify(r: CheckResult, m: Migration): Result[Unit] = lift do:
   case r
   of CheckResult.HashMismatch:
     raise newException(
@@ -182,7 +185,7 @@ proc verify(r: CheckResult, m: Migration): Try[Unit] = tryM do:
   of CheckResult.Applied, CheckResult.Ok:
     discard
 
-proc checkMigration(conn: Conn, m: Migration, versions: VersionsConfig): Try[CheckResult] = act do:
+proc checkMigration(conn: Conn, m: Migration, versions: VersionsConfig): Result[CheckResult] = act do:
   row <- conn.getMigrationRowByVersion(m.version, versions)
   lastRow <- conn.getLastMigrationRow(versions)
   yield row.fold(
@@ -193,31 +196,31 @@ proc checkMigration(conn: Conn, m: Migration, versions: VersionsConfig): Try[Che
     row => (if m.sql.sqlHash == row[1].hash: CheckResult.Applied else: CheckResult.HashMismatch)
   )
 
-proc migrate(conn: Conn, migration: Migration, versions: VersionsConfig): Try[Unit] = catch(
+proc migrate(conn: Conn, migration: Migration, versions: VersionsConfig): Result[Unit] = catch(
   act do:
-    tryM conn.exec(sql"begin transaction")
+    lift conn.exec(sql"begin transaction")
     chk <- conn.checkMigration(migration, versions)
     chk.verify(migration)
     _ <- (block:
       if chk == CheckResult.Ok:
         act do:
           queries <- migration.sql.parseQueries
-          queries.traverse((q: SqlQuery) => tryM conn.exec(q))
+          queries.traverse((q: SqlQuery) => lift conn.exec(q))
           conn.insert(migration.toDb, versions)
           yield ()
       else:
         ().success
     )
-    tryM conn.exec(sql"end transaction")
+    lift conn.exec(sql"end transaction")
     yield (),
   (e: ref Exception) => (
-    tryM do:
+    lift do:
       conn.exec(sql"rollback transaction")
       raise e
   )
 )
 
-proc parseVersionsTable(v: string): Try[VersionsConfig] = tryM do:
+proc parseVersionsTable(v: string): Result[VersionsConfig] = lift do:
   let cfg = v.split(".")
   if cfg.len < 1 and cfg.len > 2:
     raise newException(Exception, fmt"Invalid dbschema versions table name '$v'")
@@ -226,7 +229,7 @@ proc parseVersionsTable(v: string): Try[VersionsConfig] = tryM do:
   else:
     (cfg[0].some, cfg[1])
 
-proc migrate*(conn: Conn, migrations: List[Migration], versionsTable: string): Try[Unit] = act do:
+proc migrate*(conn: Conn, migrations: List[Migration], versionsTable: string): Result[Unit] = act do:
   versions <- parseVersionsTable(versionsTable)
   initialized <- conn.hasSchemaTable(versions)
   (block:
@@ -238,7 +241,7 @@ proc migrate*(conn: Conn, migrations: List[Migration], versionsTable: string): T
     .traverse((m: Migration) => conn.migrate(m, versions))
   yield ()
 
-proc isMigrationsUpToDate*(conn: Conn, migrations: List[Migration], versionsTable: string): Try[bool] = act do:
+proc isMigrationsUpToDate*(conn: Conn, migrations: List[Migration], versionsTable: string): Result[bool] = act do:
   versions <- parseVersionsTable(versionsTable)
   initialized <- conn.hasSchemaTable(versions)
 
