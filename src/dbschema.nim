@@ -217,7 +217,7 @@ proc migrate(conn: Conn, migration: Migration, versions: VersionsConfig): Try[Un
   )
 )
 
-proc parseVersionsConfig(v: string): Try[VersionsConfig] = tryM do:
+proc parseVersionsTable(v: string): Try[VersionsConfig] = tryM do:
   let cfg = v.split(".")
   if cfg.len < 1 and cfg.len > 2:
     raise newException(Exception, fmt"Invalid dbschema versions table name '$v'")
@@ -226,8 +226,8 @@ proc parseVersionsConfig(v: string): Try[VersionsConfig] = tryM do:
   else:
     (cfg[0].some, cfg[1])
 
-proc migrate*(conn: Conn, migrations: List[Migration], versionsConfig: string): Try[Unit] = act do:
-  versions <- parseVersionsConfig(versionsConfig)
+proc migrate*(conn: Conn, migrations: List[Migration], versionsTable: string): Try[Unit] = act do:
+  versions <- parseVersionsTable(versionsTable)
   initialized <- conn.hasSchemaTable(versions)
   (block:
      if not initialized:
@@ -238,8 +238,8 @@ proc migrate*(conn: Conn, migrations: List[Migration], versionsConfig: string): 
     .traverse((m: Migration) => conn.migrate(m, versions))
   yield ()
 
-proc isMigrationsUpToDate*(conn: Conn, migrations: List[Migration], versionsConfig: string): Try[bool] = act do:
-  versions <- parseVersionsConfig(versionsConfig)
+proc isMigrationsUpToDate*(conn: Conn, migrations: List[Migration], versionsTable: string): Try[bool] = act do:
+  versions <- parseVersionsTable(versionsTable)
   initialized <- conn.hasSchemaTable(versions)
 
   if not initialized:

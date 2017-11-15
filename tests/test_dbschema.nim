@@ -58,10 +58,9 @@ suite "dbschema":
     sql = sql(m1.sql.string & "---;\n")
   )
 
-  const configSchema = "dbschema"
-  const configTable = "dbschema_versions"
-  const versionsConfig = configSchema & "." & configTable
-  let versions = versionsConfig.parseVersionsConfig.run
+  const versionsSchema = "dbschema"
+  const versionsTable = versionsSchema & "." & "dbschema_versions"
+  let versions = versionsTable.parseVersionsTable.run
 
   when usePostgres:
     let conn = db_postgres.open(
@@ -82,12 +81,12 @@ suite "dbschema":
     let conn = db_sqlite.open(":memory:", "", "", "")
 
   test "Check if db is up to date before migrations":
-    check: conn.isMigrationsUpToDate(asList(m1), versionsConfig).run == false
+    check: conn.isMigrationsUpToDate(asList(m1), versionsTable).run == false
 
   test "Create initial schema":
 
     check: conn.hasSchemaTable(versions).run == false
-    check: conn.migrate(asList(m1), versionsConfig).run == ()
+    check: conn.migrate(asList(m1), versionsTable).run == ()
     check: conn.hasSchemaTable(versions).run == true
     check: conn.getAllRows(sql"select * from t1").len == 2
     check: conn.getAllRows(sql"select * from t2").len == 0
@@ -99,30 +98,30 @@ suite "dbschema":
     )
 
   test "Check if db is up to date after first migration":
-    check: conn.isMigrationsUpToDate(asList(m1), versionsConfig).run == true
-    check: conn.isMigrationsUpToDate(asList(m1, m2), versionsConfig).run == false
+    check: conn.isMigrationsUpToDate(asList(m1), versionsTable).run == true
+    check: conn.isMigrationsUpToDate(asList(m1, m2), versionsTable).run == false
 
   test "Update schema":
 
-    check: conn.migrate(asList(m1, m2), versionsConfig).run == ()
+    check: conn.migrate(asList(m1, m2), versionsTable).run == ()
     let row = conn.getLastMigrationRow(versions).run.get[1]
     check: row.version == m2.version
 
   test "Do nothing when schema is up to date":
 
-    check: conn.migrate(asList(m1, m2), versionsConfig).run == ()
+    check: conn.migrate(asList(m1, m2), versionsTable).run == ()
     let row = conn.getLastMigrationRow(versions).run.get[1]
     check: row.version == m2.version
 
   test "Fail on outdated migration":
 
-    expect(Exception): discard conn.migrate(asList(m1, m2, outdated), versionsConfig).run
+    expect(Exception): discard conn.migrate(asList(m1, m2, outdated), versionsTable).run
     let row = conn.getLastMigrationRow(versions).run.get[1]
     check: row.version == m2.version
 
   test "Fail on hash mismatch":
 
-    expect(Exception): discard conn.migrate(asList(mismatched, m2), versionsConfig).run
+    expect(Exception): discard conn.migrate(asList(mismatched, m2), versionsTable).run
     let row = conn.getLastMigrationRow(versions).run.get[1]
     check: row.version == m2.version
 
@@ -130,7 +129,7 @@ suite "dbschema":
     let m11 = m1.copyMigration(
       sql = m1.sql.string.replace("\n", "\c\L").sql
     )
-    check: conn.migrate(asList(m11, m2), versionsConfig).run == ()
+    check: conn.migrate(asList(m11, m2), versionsTable).run == ()
     let row = conn.getLastMigrationRow(versions).run.get[1]
     check: row.version == m2.version
 
