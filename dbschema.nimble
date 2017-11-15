@@ -1,6 +1,6 @@
 # Package
 
-version       = "0.1.0"
+version       = "0.1.1"
 author        = "Anatoly Galiulin"
 description   = "Database scheme migration library for Nim language"
 license       = "MIT"

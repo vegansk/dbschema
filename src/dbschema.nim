@@ -97,7 +97,6 @@ proc parseQueries(s: SqlQuery): Try[List[SqlQuery]] = tryM do:
 
 proc sqlHash(q: SqlQuery): Hash =
   result = q.string.replace("\c", "").replace("\L", "").replace("\n", "").secureHash.`$`
-  echo result
 
 data MigrationRow, show:
   version: Version
