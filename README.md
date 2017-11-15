@@ -18,7 +18,7 @@ let migrations0 = asList(
       );
     """
   ),
-  initMigration(initVersion(1, 1), "Create table t1",
+  initMigration(initVersion(1, 1), "Create table t2",
     sql"""
       create table t2(
         id integer primary key,
