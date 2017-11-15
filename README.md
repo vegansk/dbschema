@@ -1,4 +1,7 @@
 # dbschema
+
+[![Build Status](https://travis-ci.org/vegansk/dbschema.svg?branch=master)](https://travis-ci.org/vegansk/dbschema)
+
 Database schema migration library for Nim language.
 
 ## Usage
