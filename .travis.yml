@@ -1,0 +1,18 @@
+language: c
+before_install:
+  # Install nim
+  - git clone -b v0.17.2 --depth 1 git://github.com/nim-lang/Nim.git
+  - cd Nim
+  - git clone --depth 1 git://github.com/nim-lang/csources
+  - cd csources && sh build.sh
+  - cd ..
+  - bin/nim c koch
+  - sed -i -e 's,cc = gcc,cc = clang,' config/nim.cfg
+  - ./koch boot -d:release
+  - ./koch tools -d:release
+  - export PATH=$PWD/bin:$PATH
+  - nimble update
+  - cd ..
+  - nimble install -d -y
+script:
+  - nim test
